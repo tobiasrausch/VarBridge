@@ -32,3 +32,4 @@ WORKDIR /opt/varbridge/
 ADD ./src/ /opt/varbridge/src/
 COPY .gitmodules Makefile /opt/varbridge/
 RUN make STATIC=1 all && make install
+
