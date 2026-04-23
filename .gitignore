@@ -3,7 +3,7 @@
 
 # Binaries
 bin/
-src/breaktracer
+src/varbridge
 
 # Prerequisites
 *.d
