@@ -34,22 +34,22 @@ ENV BOOST_ROOT /usr
 # install breaktracer
 RUN cd /opt \
     && git clone --recursive https://github.com/tobiasrausch/VarBridge.git \
-    && cd /opt/varbridge/ \
+    && cd /opt/VarBridge/ \
     && make STATIC=1 all \
     && make install
 
 # Multi-stage build
 FROM alpine:latest
 RUN apk add --no-cache bash
-RUN mkdir -p /opt/varbridge/bin
-WORKDIR /opt/varbridge/bin
-COPY --from=0 /opt/varbridge/bin/varbridge .
+RUN mkdir -p /opt/VarBridge/bin
+WORKDIR /opt/VarBridge/bin
+COPY --from=0 /opt/VarBridge/bin/varbridge .
 
 # Workdir
 WORKDIR /home
 
 # Add varbridge to PATH
-ENV PATH="/opt/varbridge/bin:${PATH}"
+ENV PATH="/opt/VarBridge/bin:${PATH}"
 
 # by default /bin/sh is executed
 CMD ["/bin/bash"]

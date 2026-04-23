@@ -28,8 +28,8 @@ RUN apt-get update && apt-get install -y \
 
 ENV BOOST_ROOT /usr
 
-WORKDIR /opt/varbridge/
-ADD ./src/ /opt/varbridge/src/
-COPY .gitmodules Makefile /opt/varbridge/
+WORKDIR /opt/VarBridge/
+ADD ./src/ /opt/VarBridge/src/
+COPY .gitmodules Makefile /opt/VarBridge/
 RUN make STATIC=1 all && make install
 
