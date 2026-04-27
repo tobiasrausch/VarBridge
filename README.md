@@ -37,7 +37,7 @@ Variants where the ALT allele in the assembly is the REF allele in the target ge
 
 ## License
 
-VarBridge is free and open source (BSD). Consult the accompanying [LICENSE](https://github.com/tobiasrausch/VarBridge/blob/master/LICENSE) file for more details.
+VarBridge is free and open source (BSD). Consult the accompanying [LICENSE](https://github.com/tobiasrausch/VarBridge/blob/main/LICENSE) file for more details.
 
 
 ## Credits
