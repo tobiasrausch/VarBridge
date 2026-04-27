@@ -1,4 +1,4 @@
-# VarBridge: Lifting variants from a source to a target genome
+# VarBridge: Fast lifting of variants from a source to a target genome using a source-to-target genome alignment
 
 VarBridge lifts variants from a source to a target genome using an alignment of the source to the target genome.
 
