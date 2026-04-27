@@ -30,6 +30,11 @@ The output VCF is unsorted and thus, you need to sort it using bcftools for inde
 
 `bcftools sort out.vcf > sorted.vcf`
 
+Variants where the ALT allele in the assembly is the REF allele in the target genome (GRCh38) get the flag REF_ALT_SWAP. Please note that homozygous alternative variants on the assembly with a 1/1 genotype are then converted to 0/0 for the target genome if there is a REF_ALT_SWAP. You can use bcftools to filter such non-variant sites.
+
+`bcftools view --min-ac 1 sorted.vcf` 
+
+
 ## License
 
 VarBridge is free and open source (BSD). Consult the accompanying [LICENSE](https://github.com/tobiasrausch/VarBridge/blob/master/LICENSE) file for more details.

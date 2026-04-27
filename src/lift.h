@@ -139,6 +139,7 @@ namespace varbridge {
     *out << "##INFO=<ID=LIFT_SRC,Number=1,Type=String,Description=\"Source variant in assembly: contig:pos:ref:alt\">\n";
     *out << "##INFO=<ID=EDLIB_EDIST,Number=1,Type=Integer,Description=\"Edit distance of liftover alignment window\">\n";
     *out << "##INFO=<ID=REF_ALT_SWAP,Number=0,Type=Flag,Description=\"ALT assembly allele is REF allele in target genome\">\n";
+    *out << "##INFO=<ID=REVERSE,Number=0,Type=Flag,Description=\"Assembly contig of this variant aligns in reverse to target genome\">\n";
     *out << "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n";
     for (int32_t i = 0; i < hdr->n_targets; ++i) *out << "##contig=<ID=" << hdr->target_name[i] << ",length=" << hdr->target_len[i] << ">\n";
     *out << "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" << c.sample << "\n";
@@ -322,15 +323,15 @@ namespace varbridge {
 	  if (!fwd) reverseComplement(hg38_alt2);
 	  int32_t lifted_gp2 = orig_lifted_gp;
 	  if (hg38_ref2 != hg38_alt2) leftNormalize(seq, chromLen, lifted_gp2, hg38_ref2, hg38_alt2);
-	  if (hg38_ref2 == hg38_alt2) { ++itVar; continue; }  // Both alleles map to hg38 REF
 	  // Swap genotypes
 	  int32_t new_gtA1 = (itVar->gtA1 == 0) ? 1 : 0;
 	  int32_t new_gtA2 = (itVar->gtA2 == 0) ? 1 : 0;
-	  if (new_gtA1 + new_gtA2 == 0) { ++itVar; continue; }  // Homozygous hg38 REF
 	  *out << hdr->target_name[refIndex] << '\t' << (lifted_gp2 + 1) << '\t' << '.' << '\t' << hg38_ref2 << '\t' << hg38_alt2 << '\t';
 	  if (bcf_float_is_missing(itVar->qual)) *out << '.';
 	  else *out << itVar->qual;
-	  *out << '\t' << itVar->filter << '\t' << "LIFT_SRC=" << ctgname << ':' << (varPos + 1) << ':' << itVar->ref << ':' << itVar->alt << ";EDLIB_EDIST=" << edist << ";REF_ALT_SWAP\t" << "GT" << '\t' << new_gtA1 << '/' << new_gtA2 << std::endl;
+	  *out << '\t' << itVar->filter << '\t' << "LIFT_SRC=" << ctgname << ':' << (varPos + 1) << ':' << itVar->ref << ':' << itVar->alt << ";EDLIB_EDIST=" << edist << ";REF_ALT_SWAP";
+	  if (rec->core.flag & BAM_FREVERSE) *out << ";REVERSE";
+	  *out << '\t' << "GT" << '\t' << new_gtA1 << '/' << new_gtA2 << std::endl;
 	  ever_lifted[varIdx] = true;
 	  ++itVar; continue;
 	}
@@ -339,7 +340,9 @@ namespace varbridge {
 	*out << hdr->target_name[refIndex] << '\t' << (lifted_gp + 1) << '\t' << '.' << '\t' << hg38_ref << '\t' << hg38_alt << '\t';
 	if (bcf_float_is_missing(itVar->qual)) *out << '.';
 	else *out << itVar->qual;
-	*out << '\t' << itVar->filter << '\t' << "LIFT_SRC=" << ctgname << ':' << (varPos + 1) << ':' << itVar->ref << ':' << itVar->alt << ";EDLIB_EDIST=" << edist << '\t' << "GT" << '\t' << itVar->gtA1 << '/' << itVar->gtA2 << std::endl;
+	*out << '\t' << itVar->filter << '\t' << "LIFT_SRC=" << ctgname << ':' << (varPos + 1) << ':' << itVar->ref << ':' << itVar->alt << ";EDLIB_EDIST=" << edist;
+	if (rec->core.flag & BAM_FREVERSE) *out << ";REVERSE";
+	*out << '\t' << "GT" << '\t' << itVar->gtA1 << '/' << itVar->gtA2 << std::endl;
 	ever_lifted[varIdx] = true;
 	++itVar;
       }
