@@ -22,11 +22,11 @@ With such an alignment, VarBridge lifts variants using:
 
 `varbridge lift -g hg38.fa -s S1 -a asm.bcf asm_to_hg38.bam`
 
-You can redirect the output to a VCF file and also output all non-liftable variants with their closest interval in GRCh38.
+You can redirect the output to a VCF file and also output all non-liftable variants with their closest liftable position in GRCh38.
 
 `varbridge lift -g hg38.fa -b out.bed -o out.vcf -s S1 -a asm.bcf asm_to_hg38.bam`
 
-The output VCF is unsorted and thus, you need to sort it using bcftools for indexing.
+Please note that the output VCF is unsorted and thus, you need to sort it using bcftools for indexing.
 
 `bcftools sort out.vcf > sorted.vcf`
 

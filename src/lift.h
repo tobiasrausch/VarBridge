@@ -14,12 +14,9 @@
 #include <vector>
 #include <htslib/vcf.h>
 #include <htslib/sam.h>
+#include <htslib/faidx.h>
 #include <math.h>
 #include <stdio.h>
-
-#include <htslib/sam.h>
-#include <htslib/vcf.h>
-#include <htslib/faidx.h>
 
 #include "edlib.h"
 #include "variants.h"
@@ -50,6 +47,7 @@ namespace varbridge {
     int32_t hg38_chr;
     int32_t hg38_min;
     int32_t hg38_max;
+    bool fwd;
   };
 
 
@@ -184,7 +182,6 @@ namespace varbridge {
 	  if (seqStart == -1) seqStart = sp;
 	  sp += len; seqEnd = sp;
 	} else if (op == BAM_CDEL) {
-	  if (seqStart == -1) seqStart = sp;
 	  gp += len;
 	} else if (op == BAM_CSOFT_CLIP) {
 	  sp += len;
@@ -219,6 +216,7 @@ namespace varbridge {
 	seg.hg38_chr  = rec->core.tid;
 	seg.hg38_min  = std::min(hg38_lo, hg38_hi);
 	seg.hg38_max  = std::max(hg38_lo, hg38_hi) + 1;
+	seg.fwd       = fwd;
 	alignSegments[rid].push_back(seg);
       }
 
@@ -353,11 +351,11 @@ namespace varbridge {
     if (seq != NULL) free(seq);
     fai_destroy(fai);
 
-    // BED output for non-liftable variants
+    // BEDPE output for non-liftable variants
     if (!c.bedfile.empty()) {
       std::ofstream bedout(c.bedfile.string());
       if (!bedout.is_open()) {
-	std::cerr << "Cannot open BED output file: " << c.bedfile.string() << std::endl;
+	std::cerr << "Cannot open BEDPE output file: " << c.bedfile.string() << std::endl;
 	bam_hdr_destroy(hdr);
 	hts_idx_destroy(idx);
 	sam_close(samfile);
@@ -391,15 +389,48 @@ namespace varbridge {
 	  --it;
 	  if (it->asm_end <= v.pos) { left_it = it; break; }
 	}
-	if ((left_it == segs.end()) || (right_it == segs.end())) continue;
-	if (left_it->hg38_chr != right_it->hg38_chr) continue;
+	if ((left_it == segs.end()) && (right_it == segs.end())) continue;
 
-	// Output flanking positions
-	int32_t bed_s = std::min(left_it->hg38_max, right_it->hg38_max);
-	int32_t bed_e = std::max(left_it->hg38_min, right_it->hg38_min);
-	if (bed_s >= bed_e) continue; 
 	std::string ctgname = ridToCtg.count(v.chr) ? ridToCtg[v.chr] : std::to_string(v.chr);
-	bedout << hdr->target_name[left_it->hg38_chr] << '\t' << bed_s << '\t' << bed_e << '\t' << ctgname << ':' << (v.pos + 1) << ':' << v.ref << ':' << v.alt << std::endl;
+	std::string vid = ctgname + ':' + std::to_string(v.pos + 1) + ':' + v.ref + ':' + v.alt;
+
+	// Upstream liftable position
+	std::string up_chrom = "NA";
+	std::string up_start = "NA";
+	std::string up_end = "NA";
+	std::string up_strand = "NA";
+	std::string up_offset_str = "NA";
+	int32_t score = 0;
+	if (left_it != segs.end()) {
+	  int32_t up_pos = left_it->hg38_max - 1;
+	  int32_t up_offset = (left_it->asm_end - 1) - v.pos;  // negative
+	  score += v.pos - (left_it->asm_end - 1);
+	  up_chrom = hdr->target_name[left_it->hg38_chr];
+	  up_start = std::to_string(up_pos);
+	  up_end = std::to_string(up_pos + 1);
+	  up_strand = left_it->fwd ? "+" : "-";
+	  up_offset_str = std::to_string(up_offset);
+	}
+
+	// Downstream liftable position
+	std::string dn_chrom = "NA";
+	std::string dn_start = "NA";
+	std::string dn_end = "NA";
+	std::string dn_strand = "NA";
+	std::string dn_offset_str = "NA";
+	if (right_it != segs.end()) {
+	  int32_t dn_pos = right_it->hg38_min;
+	  int32_t dn_offset = right_it->asm_start - v.pos;     // positive
+	  score += right_it->asm_start - v.pos;
+	  dn_chrom = hdr->target_name[right_it->hg38_chr];
+	  dn_start = std::to_string(dn_pos);
+	  dn_end = std::to_string(dn_pos + 1);
+	  dn_strand = right_it->fwd ? "+" : "-";
+	  dn_offset_str = std::to_string(dn_offset);
+	}
+
+	// BEDPE: chrom1 start1 end1 chrom2 start2 end2 name score strand1 strand2 upstream_offset downstream_offset
+	bedout << up_chrom << '\t' << up_start << '\t' << up_end << '\t' << dn_chrom << '\t' << dn_start << '\t' << dn_end << '\t' << vid << '\t' << score << '\t' << up_strand << '\t' << dn_strand << '\t' << up_offset_str << '\t' << dn_offset_str << std::endl;
       }
     }
 
@@ -467,7 +498,7 @@ namespace varbridge {
       ("window,n", boost::program_options::value<int32_t>(&c.win)->default_value(50), "realignment window")
       ("extra,e", boost::program_options::value<int32_t>(&c.extra)->default_value(50), "extra target genome flank")
       ("multi-lift,m", boost::program_options::bool_switch(&c.multiLift)->default_value(false), "lift variant for all covering alignments")
-      ("bed-file,b", boost::program_options::value<boost::filesystem::path>(&c.bedfile), "BED output file for non-liftable variants")
+      ("bed-file,b", boost::program_options::value<boost::filesystem::path>(&c.bedfile), "BEDPE output file for non-liftable variants")
       ;
 
     

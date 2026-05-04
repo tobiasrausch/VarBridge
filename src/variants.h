@@ -34,7 +34,6 @@ namespace varbridge
   _loadVariants(TConfig& c, std::vector<TVariant>& pV) {
     // Load BCF file
     htsFile* ifile = bcf_open(c.vcffile.c_str(), "r");
-    hts_idx_t* bcfidx = bcf_index_load(c.vcffile.c_str());
     bcf_hdr_t* hdr = bcf_hdr_read(ifile);
 
     // Find sample
@@ -89,7 +88,6 @@ namespace varbridge
     
     // Close BCF
     bcf_hdr_destroy(hdr);
-    hts_idx_destroy(bcfidx);
     bcf_close(ifile);
     
     return true;
