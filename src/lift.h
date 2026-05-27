@@ -104,6 +104,356 @@ namespace varbridge {
     }
   }
 
+  // replace entire INFO
+  inline std::string
+  replaceInfoField(std::string const& info, std::string const& key, std::string const& newVal) {
+    std::string search = key + "=";
+    size_t pos = 0;
+    while (pos < info.size()) {
+      if (info.compare(pos, search.size(), search) == 0 && (pos == 0 || info[pos - 1] == ';')) {
+	size_t end = info.find(';', pos + search.size());
+	if (end == std::string::npos) end = info.size();
+	return info.substr(0, pos + search.size()) + newVal + info.substr(end);
+      }
+      size_t ns = info.find(';', pos);
+      if (ns == std::string::npos) break;
+      pos = ns + 1;
+    }
+    return info + ";" + search + newVal;
+  }
+
+  // Update BND ALT
+  inline std::string
+  updateBndAlt(std::string const& alt, std::string const& newChr, int32_t newPos1based) {
+    size_t colon = alt.find(':');
+    if (colon == std::string::npos) return alt;
+    // Walk left to the bracket before chr
+    size_t lb = colon;
+    while (lb > 0 && alt[lb] != '[' && alt[lb] != ']') --lb;
+    if (alt[lb] != '[' && alt[lb] != ']') return alt;
+    // Walk right to the bracket after pos
+    size_t rb = colon + 1;
+    while (rb < alt.size() && alt[rb] != '[' && alt[rb] != ']') ++rb;
+    if (rb >= alt.size()) return alt;
+    return alt.substr(0, lb + 1) + newChr + ":" + std::to_string(newPos1based) + alt.substr(rb);
+  }
+
+
+  template<typename TConfig>
+  inline int32_t
+  liftSvVariants(TConfig& c, std::vector<SvVariant>& svVariants, std::ostream* out) {
+    if (svVariants.empty()) return 0;
+
+    // look up SVs by their END/POS2 endpoint (chr2, svEnd)
+    struct SvEndEntry {
+      int32_t chr2;
+      int32_t svEnd;
+      size_t idx;
+      bool operator<(SvEndEntry const& o) const {
+	return (chr2 < o.chr2) || ((chr2 == o.chr2) && (svEnd < o.svEnd));
+      }
+    };
+    std::vector<SvEndEntry> svEnds;
+    svEnds.reserve(svVariants.size());
+    for (size_t i = 0; i < svVariants.size(); ++i) svEnds.push_back({svVariants[i].chr2, svVariants[i].svEnd, i});
+    std::sort(svEnds.begin(), svEnds.end());
+
+    // SV lifted position
+    struct LiftedPos {
+      int32_t chr = -1;
+      int32_t pos = -1;
+      bool fwd = true;
+      bool valid = false;
+    };
+    std::vector<LiftedPos> liftedStart(svVariants.size());
+    std::vector<LiftedPos> liftedEnd(svVariants.size());
+
+    // Alignment segments
+    std::map<int32_t, std::vector<AlignSegment>> alignSegments;
+
+    // Open BAM
+    samFile* samfile = sam_open(c.bamfile.string().c_str(), "r");
+    hts_idx_t* idx = sam_index_load(samfile, c.bamfile.string().c_str());
+    bam_hdr_t* hdr = sam_hdr_read(samfile);
+    bam1_t* rec = bam_init1();
+    while (sam_read1(samfile, hdr, rec) >= 0) {
+      if (rec->core.flag & (BAM_FQCFAIL | BAM_FDUP | BAM_FUNMAP | BAM_FSECONDARY)) continue;
+      if ((rec->core.qual < c.minMapQual) || (rec->core.tid < 0)) continue;
+
+      std::string ctgname = bam_get_qname(rec);
+      auto vcfIt = c.vcfMap.find(ctgname);
+      if (vcfIt == c.vcfMap.end()) continue;
+      int32_t rid = (int32_t) vcfIt->second;
+
+      // Parse CIGAR
+      uint32_t* cigar = bam_get_cigar(rec);
+      int32_t gp = rec->core.pos;
+      int32_t sp = 0;
+      int32_t seqStart = -1;
+      int32_t seqEnd = -1;
+      for (uint32_t ci = 0; ci < rec->core.n_cigar; ++ci) {
+	int op = bam_cigar_op(cigar[ci]);
+	int32_t len = bam_cigar_oplen(cigar[ci]);
+	if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) {
+	  if (seqStart == -1) seqStart = sp;
+	  gp += len; sp += len; seqEnd = sp;
+	} else if (op == BAM_CINS) {
+	  if (seqStart == -1) seqStart = sp;
+	  sp += len; seqEnd = sp;
+	} else if (op == BAM_CDEL || op == BAM_CREF_SKIP) {
+	  gp += len;
+	} else if (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP) {
+	  sp += len;
+	}
+      }
+      if (seqStart == -1) continue;
+
+      bool fwd = !(rec->core.flag & BAM_FREVERSE);
+      if (!fwd) {
+	int32_t tmp = seqStart;
+	seqStart = sp - seqEnd;
+	seqEnd   = sp - tmp;
+      }
+
+      // Store alignment segment for BEDPE neighbour logic
+      {
+	int32_t sp_lo = fwd ? seqStart : (sp - seqEnd);
+	int32_t sp_hi = fwd ? (seqEnd - 1) : (sp - seqStart - 1);
+	int32_t hg38_lo = queryToRefPos(cigar, (int32_t)rec->core.n_cigar, rec->core.pos, sp_lo);
+	int32_t hg38_hi = queryToRefPos(cigar, (int32_t)rec->core.n_cigar, rec->core.pos, sp_hi);
+	AlignSegment seg;
+	seg.asm_start = seqStart;
+	seg.asm_end = seqEnd;
+	seg.hg38_chr = rec->core.tid;
+	seg.hg38_min = std::min(hg38_lo, hg38_hi);
+	seg.hg38_max = std::max(hg38_lo, hg38_hi) + 1;
+	seg.fwd = fwd;
+	alignSegments[rid].push_back(seg);
+      }
+
+      // Lift a single assembly position to GRCh38 using the CIGAR
+      auto liftPos = [&](int32_t asmPos) -> int32_t {
+	int32_t qp = fwd ? asmPos : (sp - asmPos - 1);
+	return queryToRefPos(cigar, (int32_t)rec->core.n_cigar, rec->core.pos, qp);
+      };
+
+      // Lift SV starts
+      auto itS = std::lower_bound(svVariants.begin(), svVariants.end(), SvVariant(rid, seqStart));
+      while (itS != svVariants.end() && itS->chr == rid && itS->pos < seqEnd) {
+	size_t i = (size_t)(itS - svVariants.begin());
+	if (!liftedStart[i].valid) {
+	  int32_t lp = liftPos(itS->pos);
+	  if (lp >= 0) {
+	    liftedStart[i] = {rec->core.tid, lp, fwd, true};
+	  }
+	}
+	++itS;
+      }
+
+      // Lift SV ends
+      SvEndEntry lo{rid, seqStart, 0};
+      SvEndEntry hi{rid, seqEnd, SIZE_MAX};
+      auto itElo = std::lower_bound(svEnds.begin(), svEnds.end(), lo);
+      auto itEhi = std::lower_bound(svEnds.begin(), svEnds.end(), hi);
+      for (auto itE = itElo; itE != itEhi; ++itE) {
+	size_t i = itE->idx;
+	if (!liftedEnd[i].valid) {
+	  int32_t lp = liftPos(itE->svEnd);
+	  if (lp >= 0) {
+	    liftedEnd[i] = {rec->core.tid, lp, fwd, true};
+	  }
+	}
+      }
+    }
+    bam_destroy1(rec);
+
+    // Sort segments
+    for (auto& kv : alignSegments) std::sort(kv.second.begin(), kv.second.end(), [](AlignSegment const& a, AlignSegment const& b){ return a.asm_start < b.asm_start; });
+
+    // Load reference genome
+    faidx_t* fai = fai_load(c.genome.string().c_str());
+    int32_t refChrIdx = -1;
+    char* refSeq    = NULL;
+    int32_t refChromLen = 0;
+
+    // Evaluate liftability
+    std::vector<bool> svLifted(svVariants.size(), false);
+    for (size_t i = 0; i < svVariants.size(); ++i) {
+      auto const& sv = svVariants[i];
+      auto const& ls = liftedStart[i];
+      auto const& le = liftedEnd[i];
+      if (!ls.valid || !le.valid) continue;
+      if (sv.svType == "BND") {
+	svLifted[i] = true;
+      } else {
+	if (ls.chr != le.chr) continue;
+	int32_t lifted_size = std::abs(le.pos - ls.pos);
+	int32_t asm_size = std::max(1, sv.svLen);
+	double dev = std::abs((double)lifted_size - asm_size) / (double)asm_size;
+	if (dev > 0.10) continue; // Size difference >10% ?
+	svLifted[i] = true;
+      }
+      if (!svLifted[i]) continue;
+
+      // For non-BND SVs the lower position is always the VCF POS
+      int32_t vcfChr = ls.chr;
+      int32_t vcfPos = (sv.svType == "BND") ? ls.pos : std::min(ls.pos, le.pos);
+      int32_t vcfEnd = (sv.svType == "BND") ? ls.pos : std::max(ls.pos, le.pos);
+
+      // Fetch REF base at vcfPos
+      if (vcfChr != refChrIdx) {
+	if (refSeq != NULL) {
+	  free(refSeq);
+	  refSeq = NULL;
+	}
+	refChrIdx  = vcfChr;
+	refChromLen = (int32_t)hdr->target_len[refChrIdx];
+	int32_t seqlen = -1;
+	refSeq = faidx_fetch_seq(fai, hdr->target_name[refChrIdx], 0, refChromLen, &seqlen);
+      }
+      std::string hg38Ref = ".";
+      if (refSeq != NULL && vcfPos >= 0 && vcfPos < refChromLen)
+	hg38Ref = std::string(1, (char)std::toupper((unsigned char)refSeq[vcfPos]));
+
+      // Update ALT for BND
+      std::string altOut = sv.alt;
+      if (sv.svType == "BND") altOut = updateBndAlt(sv.alt, hdr->target_name[le.chr], le.pos + 1);
+
+      // Build INFO string
+      std::string info = sv.infoStr;
+      if (sv.svType == "BND") {
+	info = replaceInfoField(info, "CHR2", hdr->target_name[le.chr]);
+	info = replaceInfoField(info, "POS2", std::to_string(le.pos + 1));
+	info = replaceInfoField(info, "END",  std::to_string(vcfPos + 2));
+      } else {
+	info = replaceInfoField(info, "END", std::to_string(vcfEnd + 1));
+	int32_t newSvLen = vcfEnd - vcfPos;
+	info = replaceInfoField(info, "SVLEN", (sv.svType == "DEL") ? std::to_string(-newSvLen) : std::to_string(newSvLen));
+      }
+
+      // Append LIFT_SRC
+      std::string srcCtg = std::to_string(sv.chr);
+      for (auto const& kv : c.vcfMap) {
+	if ((int32_t)kv.second == sv.chr) {
+	  srcCtg = kv.first;
+	  break;
+	}
+      }
+      info += ";LIFT_SRC=" + srcCtg + ":" + std::to_string(sv.pos + 1) + ":" + sv.ref + ":" + sv.alt;
+      if (!ls.fwd) info += ";REVERSE";
+
+      // VCF record
+      *out << hdr->target_name[vcfChr] << '\t' << (vcfPos + 1) << '\t' << sv.id << '\t' << hg38Ref << '\t' << altOut << '\t';
+      if (bcf_float_is_missing(sv.qual)) *out << '.';
+      else *out << sv.qual;
+      *out << '\t' << sv.filter << '\t' << info << '\t' << "GT" << '\t' << sv.gtA1 << '/' << sv.gtA2 << '\n';
+    }
+
+    // Free reference sequence cache
+    if (refSeq != NULL) {
+      free(refSeq);
+      refSeq = NULL;
+    }
+    fai_destroy(fai);
+
+    // BEDPE output
+    if (!c.bedfile.empty()) {
+      std::ofstream bedout(c.bedfile.string(), std::ios_base::app);
+      if (!bedout.is_open()) {
+	std::cerr << "Cannot open BEDPE output file: " << c.bedfile.string() << std::endl;
+	bam_hdr_destroy(hdr); hts_idx_destroy(idx); sam_close(samfile);
+	return 1;
+      }
+
+      // Reverse vcfMap
+      std::map<int32_t, std::string> ridToCtg;
+      for (auto const& kv : c.vcfMap) ridToCtg[(int32_t)kv.second] = kv.first;
+
+      // Write one BEDPE record for a single SV endpoint
+      auto writeBedpeEndpoint = [&](int32_t rid, int32_t asmPos, std::string const& vid, LiftedPos const& lp) {
+	std::string up_chrom = "NA", up_start = "NA", up_end = "NA", up_strand = "NA", up_off = "NA";
+	std::string dn_chrom = "NA", dn_start = "NA", dn_end = "NA", dn_strand = "NA", dn_off = "NA";
+	int32_t score = 0;
+
+	if (lp.valid) {
+	  // Endpoint is directly liftable
+	  std::string chrName = hdr->target_name[lp.chr];
+	  std::string posStr  = std::to_string(lp.pos);
+	  std::string pos1Str = std::to_string(lp.pos + 1);
+	  std::string strandStr = lp.fwd ? "+" : "-";
+	  up_chrom = dn_chrom = chrName;
+	  up_start = dn_start = posStr;
+	  up_end = dn_end = pos1Str;
+	  up_strand = dn_strand = strandStr;
+	  up_off = dn_off = "0";
+	} else {
+	  // Endpoint is not liftable
+	  auto segIt = alignSegments.find(rid);
+	  if (segIt == alignSegments.end()) {
+	    bedout << up_chrom << '\t' << up_start << '\t' << up_end << '\t' << dn_chrom << '\t' << dn_start << '\t' << dn_end << '\t' << vid << '\t' << score << '\t' << up_strand << '\t' << dn_strand << '\t' << up_off << '\t' << dn_off << '\n';
+	    return;
+	  }
+	  auto const& segs = segIt->second;
+
+	  auto right_it = std::lower_bound(segs.begin(), segs.end(), asmPos + 1, [](AlignSegment const& s, int32_t v){ return s.asm_start < v; });
+	  auto left_bound = std::lower_bound(segs.begin(), segs.end(), asmPos, [](AlignSegment const& s, int32_t v){ return s.asm_start < v; });
+	  auto left_it = segs.end();
+	  for (auto it = left_bound; it != segs.begin(); ) {
+	    --it;
+	    if (it->asm_end <= asmPos) {
+	      left_it = it;
+	      break;
+	    }
+	  }
+	  if (left_it == segs.end() && right_it == segs.end()) {
+	    bedout << up_chrom << '\t' << up_start << '\t' << up_end << '\t' << dn_chrom << '\t' << dn_start << '\t' << dn_end << '\t' << vid << '\t' << score << '\t' << up_strand << '\t' << dn_strand << '\t' << up_off << '\t' << dn_off << '\n';
+	    return;
+	  }
+	  if (left_it != segs.end()) {
+	    int32_t up_pos = left_it->hg38_max - 1;
+	    up_chrom = hdr->target_name[left_it->hg38_chr];
+	    up_start = std::to_string(up_pos);
+	    up_end = std::to_string(up_pos + 1);
+	    up_strand = left_it->fwd ? "+" : "-";
+	    up_off = std::to_string((left_it->asm_end - 1) - asmPos);
+	    score += asmPos - (left_it->asm_end - 1);
+	  }
+	  if (right_it != segs.end()) {
+	    int32_t dn_pos = right_it->hg38_min;
+	    dn_chrom = hdr->target_name[right_it->hg38_chr];
+	    dn_start = std::to_string(dn_pos);
+	    dn_end = std::to_string(dn_pos + 1);
+	    dn_strand = right_it->fwd ? "+" : "-";
+	    dn_off = std::to_string(right_it->asm_start - asmPos);
+	    score += right_it->asm_start - asmPos;
+	  }
+	}
+	bedout << up_chrom << '\t' << up_start << '\t' << up_end << '\t' << dn_chrom << '\t' << dn_start << '\t' << dn_end << '\t' << vid << '\t' << score << '\t' << up_strand << '\t' << dn_strand << '\t' << up_off << '\t' << dn_off << '\n';
+      };
+
+      for (size_t i = 0; i < svVariants.size(); ++i) {
+	if (svLifted[i]) continue;
+	auto const& sv = svVariants[i];
+	std::string srcCtg = ridToCtg.count(sv.chr) ? ridToCtg[sv.chr] : std::to_string(sv.chr);
+	std::string vid = srcCtg + ":" + std::to_string(sv.pos + 1) + ":" + sv.ref + ":" + sv.alt;
+
+	// Record 1: SV start
+	std::string vid_start = vid + ":START";
+	writeBedpeEndpoint(sv.chr, sv.pos, vid_start, liftedStart[i]);
+
+	// Record 2: SV end (for BND: use chr2 contig; for others: same contig)
+	std::string vid_end = vid + ":END";
+	writeBedpeEndpoint(sv.chr2, sv.svEnd, vid_end, liftedEnd[i]);
+      }
+    }
+
+    bam_hdr_destroy(hdr);
+    hts_idx_destroy(idx);
+    sam_close(samfile);
+    return 0;
+  }
+
+
   template<typename TConfig, typename TVariant>
   inline int32_t
   liftVariants(TConfig& c, std::vector<TVariant>& variants) {
@@ -138,6 +488,15 @@ namespace varbridge {
     *out << "##INFO=<ID=EDLIB_EDIST,Number=1,Type=Integer,Description=\"Edit distance of liftover alignment window\">\n";
     *out << "##INFO=<ID=REF_ALT_SWAP,Number=0,Type=Flag,Description=\"ALT assembly allele is REF allele in target genome\">\n";
     *out << "##INFO=<ID=REVERSE,Number=0,Type=Flag,Description=\"Assembly contig of this variant aligns in reverse to target genome\">\n";
+    *out << "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"Type of structural variant\">\n";
+    *out << "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position of the structural variant\">\n";
+    *out << "##INFO=<ID=SVLEN,Number=1,Type=Integer,Description=\"Length of the SV\">\n";
+    *out << "##INFO=<ID=CHR2,Number=1,Type=String,Description=\"Second chromosome for inter-chromosomal BND SVs\">\n";
+    *out << "##INFO=<ID=POS2,Number=1,Type=Integer,Description=\"Second position for BND SVs\">\n";
+    *out << "##ALT=<ID=DEL,Description=\"Deletion\">\n";
+    *out << "##ALT=<ID=DUP,Description=\"Duplication\">\n";
+    *out << "##ALT=<ID=INV,Description=\"Inversion\">\n";
+    *out << "##ALT=<ID=INS,Description=\"Insertion\">\n";
     *out << "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n";
     for (int32_t i = 0; i < hdr->n_targets; ++i) *out << "##contig=<ID=" << hdr->target_name[i] << ",length=" << hdr->target_len[i] << ">\n";
     *out << "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" << c.sample << "\n";
@@ -467,6 +826,31 @@ namespace varbridge {
     if (liftVariants(c, variants) != 0) {
       std::cerr << "Lifting variants failed!" << std::endl;
       return 1;
+    }
+
+    std::cerr << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] Load structural variants" << std::endl;
+    std::vector<SvVariant> svVariants;
+    _loadSvVariants(c, svVariants);
+    std::sort(svVariants.begin(), svVariants.end());
+
+    if (!svVariants.empty()) {
+      std::cerr << '[' << boost::posix_time::to_simple_string(boost::posix_time::second_clock::local_time()) << "] Lift structural variants" << std::endl;
+      // Open output stream in append mode (header already written by liftVariants)
+      std::ofstream svOut;
+      std::ostream* svOutPtr;
+      if (c.outfile.string() == "-") svOutPtr = &std::cout;
+      else {
+	svOut.open(c.outfile.string(), std::ios_base::app);
+	if (!svOut.is_open()) {
+	  std::cerr << "Cannot open output file for SV append: " << c.outfile.string() << std::endl;
+	  return 1;
+	}
+	svOutPtr = &svOut;
+      }
+      if (liftSvVariants(c, svVariants, svOutPtr) != 0) {
+	std::cerr << "Lifting structural variants failed!" << std::endl;
+	return 1;
+      }
     }
 
 #ifdef PROFILE
