@@ -67,7 +67,13 @@ namespace varbridge
     int32_t sampleIndex = -1;
     for (int i = 0; i < bcf_hdr_nsamples(hdr); ++i)
       if (hdr->samples[i] == c.sample) sampleIndex = i;
-    if (sampleIndex < 0) return false;
+    if (sampleIndex < 0) {
+      std::cerr << "Error: None of the VCF samples matches " << c.sample << std::endl;
+      std::cerr << "Error: VCF samples are ";
+      for (int i = 0; i < bcf_hdr_nsamples(hdr); ++i) std::cerr << hdr->samples[i] << ',';
+      std::cerr << std::endl;
+      return false;
+    }
         
     // Genotypes
     int ngt = 0;
