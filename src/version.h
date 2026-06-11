@@ -5,7 +5,7 @@ namespace varbridge
 {
 
 
-  std::string varbridgeVersionNumber = "0.1.6";
+  std::string varbridgeVersionNumber = "0.1.8";
 
   inline 
     void printTitle(std::string const& title) 

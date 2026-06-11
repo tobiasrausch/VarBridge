@@ -1,3 +1,8 @@
+[![C/C++ CI](https://github.com/tobiasrausch/VarBridge/workflows/C/C++%20CI/badge.svg)](https://github.com/tobiasrausch/VarBridge/actions)
+[![Docker CI](https://github.com/tobiasrausch/VarBridge/workflows/Docker%20CI/badge.svg)](https://hub.docker.com/r/trausch/varbridge/)
+[![GitHub license](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://github.com/tobiasrausch/VarBridge/blob/master/LICENSE)
+[![GitHub Releases](https://img.shields.io/github/release/tobiasrausch/VarBridge.svg)](https://github.com/tobiasrausch/VarBridge/releases)
+
 # VarBridge: Fast lifting of variants from a source to a target genome using a source-to-target genome alignment
 
 VarBridge lifts variants from a source to a target genome using an alignment of the source to the target genome.

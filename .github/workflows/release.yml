@@ -42,7 +42,7 @@ jobs:
       - name: Extract binary
         run: |
           docker create --name extract --platform ${{ matrix.platform }} varbridge:static
-          docker cp extract:/opt/varbridge/bin/varbridge ./varbridge-${{ github.event.release.tag_name }}-linux-${{ matrix.arch }}
+          docker cp extract:/opt/VarBridge/bin/varbridge ./varbridge-${{ github.event.release.tag_name }}-linux-${{ matrix.arch }}
           docker rm -v extract
 
       - name: Upload binary
