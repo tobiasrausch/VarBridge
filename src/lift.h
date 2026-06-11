@@ -320,18 +320,6 @@ namespace varbridge {
       if (sv.svType == "BND") altOut = updateBndAlt(sv.alt, hdr->target_name[le.chr], le.pos + 1);
 
       // Build INFO string
-      std::string info = sv.infoStr;
-      if (sv.svType == "BND") {
-	info = replaceInfoField(info, "CHR2", hdr->target_name[le.chr]);
-	info = replaceInfoField(info, "POS2", std::to_string(le.pos + 1));
-	info = replaceInfoField(info, "END",  std::to_string(vcfPos + 2));
-      } else {
-	info = replaceInfoField(info, "END", std::to_string(vcfEnd + 1));
-	int32_t newSvLen = vcfEnd - vcfPos;
-	info = replaceInfoField(info, "SVLEN", (sv.svType == "DEL") ? std::to_string(-newSvLen) : std::to_string(newSvLen));
-      }
-
-      // Append LIFT_SRC
       std::string srcCtg = std::to_string(sv.chr);
       for (auto const& kv : c.vcfMap) {
 	if ((int32_t)kv.second == sv.chr) {
@@ -339,6 +327,17 @@ namespace varbridge {
 	  break;
 	}
       }
+      std::string info = "SVTYPE=" + sv.svType;
+      if (sv.svType == "BND") {
+	info += ";CHR2=" + std::string(hdr->target_name[le.chr]);
+	info += ";POS2=" + std::to_string(le.pos + 1);
+	info += ";END=" + std::to_string(vcfPos + 2);
+      } else {
+	info += ";END=" + std::to_string(vcfEnd + 1);
+	int32_t newSvLen = vcfEnd - vcfPos;
+	info += ";SVLEN=" + ((sv.svType == "DEL") ? std::to_string(-newSvLen) : std::to_string(newSvLen));
+      }
+      if (!sv.ct.empty()) info += ";CT=" + sv.ct;
       info += ";LIFT_SRC=" + srcCtg + ":" + std::to_string(sv.pos + 1) + ":" + sv.ref + ":" + sv.alt;
       if (!ls.fwd) info += ";REVERSE";
 
@@ -484,6 +483,7 @@ namespace varbridge {
     *out << "##fileformat=VCFv4.2\n";
     *out << "##fileDate=" << boost::gregorian::to_iso_string(today) << "\n";
     *out << "##FILTER=<ID=PASS,Description=\"All filters passed\">\n";
+    *out << "##FILTER=<ID=LowQual,Description=\"Low quality variant\">\n";
     *out << "##INFO=<ID=LIFT_SRC,Number=1,Type=String,Description=\"Source variant in assembly: contig:pos:ref:alt\">\n";
     *out << "##INFO=<ID=EDLIB_EDIST,Number=1,Type=Integer,Description=\"Edit distance of liftover alignment window\">\n";
     *out << "##INFO=<ID=REF_ALT_SWAP,Number=0,Type=Flag,Description=\"ALT assembly allele is REF allele in target genome\">\n";
@@ -493,6 +493,7 @@ namespace varbridge {
     *out << "##INFO=<ID=SVLEN,Number=1,Type=Integer,Description=\"Length of the SV\">\n";
     *out << "##INFO=<ID=CHR2,Number=1,Type=String,Description=\"Second chromosome for inter-chromosomal BND SVs\">\n";
     *out << "##INFO=<ID=POS2,Number=1,Type=Integer,Description=\"Second position for BND SVs\">\n";
+    *out << "##INFO=<ID=CT,Number=1,Type=String,Description=\"SV connection type\">\n";
     *out << "##ALT=<ID=DEL,Description=\"Deletion\">\n";
     *out << "##ALT=<ID=DUP,Description=\"Duplication\">\n";
     *out << "##ALT=<ID=INV,Description=\"Inversion\">\n";
@@ -872,8 +873,8 @@ namespace varbridge {
       ("help,?", "show help message")
       ("genome,g", boost::program_options::value<boost::filesystem::path>(&c.genome), "genome fasta file")
       ("sample,s", boost::program_options::value<std::string>(&c.sample)->default_value("NA12878"), "BCF sample name")
-      ("variants,a", boost::program_options::value<boost::filesystem::path>(&c.vcffile), "BCF input file (variants on assembly)")
-      ("outfile,o", boost::program_options::value<boost::filesystem::path>(&c.outfile), "BCF output file (variants on target genome)")
+      ("variants,a", boost::program_options::value<boost::filesystem::path>(&c.vcffile), "VCF/BCF input file (variants on assembly)")
+      ("outfile,o", boost::program_options::value<boost::filesystem::path>(&c.outfile), "VCF output file (variants on target genome)")
       ;
     
     boost::program_options::options_description disc("Lift options");

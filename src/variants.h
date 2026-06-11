@@ -5,6 +5,7 @@
 #include <boost/algorithm/string.hpp>
 #include <htslib/sam.h>
 #include <htslib/vcf.h>
+#include <set>
 
 
 namespace varbridge
@@ -46,10 +47,9 @@ namespace varbridge
     int32_t gtA2;
     std::string id;
     std::string chr2Name;
-    std::string infoStr;
+    std::string ct;
 
-    SvVariant(int32_t c, int32_t p) : chr(c), pos(p), chr2(c), svEnd(p), svLen(0),
-      svType(""), ref(""), alt(""), qual(0), filter("."), gtA1(0), gtA2(0), id(".") {}
+    SvVariant(int32_t c, int32_t p) : chr(c), pos(p), chr2(c), svEnd(p), svLen(0), svType(""), ref(""), alt(""), qual(0), filter("."), gtA1(0), gtA2(0), id("."), ct("") {}
 
     bool operator<(SvVariant const& s2) const {
       return (chr < s2.chr) || ((chr == s2.chr) && (pos < s2.pos));
@@ -150,7 +150,6 @@ namespace varbridge
     int nivals = 0;
     char* svals = NULL;
     int nsvals = 0;
-    kstring_t ks = {0, 0, NULL};
 
     bcf1_t* rec = bcf_init1();
     while (bcf_read(ifile, hdr, rec) == 0) {
@@ -189,11 +188,17 @@ namespace varbridge
       sv.gtA2 = bcf_gt_allele(gt[sampleIndex*2+1]);
 
       if (rec->d.n_flt > 0) {
-	sv.filter.clear();
+	static const std::set<std::string> declaredFilters = {"PASS", "LowQual"};
+	sv.filter = ".";
+	std::string composed;
 	for (int fi = 0; fi < rec->d.n_flt; fi++) {
-	  if (fi > 0) sv.filter += ";";
-	  sv.filter += hdr->id[BCF_DT_ID][rec->d.flt[fi]].key;
+	  std::string fltName(hdr->id[BCF_DT_ID][rec->d.flt[fi]].key);
+	  if (declaredFilters.count(fltName)) {
+	    if (!composed.empty()) composed += ";";
+	    composed += fltName;
+	  }
 	}
+	if (!composed.empty()) sv.filter = composed;
       }
 
       // BND: CHR2 and POS2
@@ -208,30 +213,20 @@ namespace varbridge
 	if (bcf_get_info_int32(hdr, rec, "POS2", &ivals, &nivals) > 0 && nivals > 0) sv.svEnd = ivals[0] - 1;
       }
 
+      // CT
+      nsvals = 0;
+      if (bcf_get_info_string(hdr, rec, "CT", &svals, &nsvals) > 0 && svals != NULL) sv.ct = std::string(svals);
+
       // SVLEN
       nivals = 0;
       if (bcf_get_info_int32(hdr, rec, "SVLEN", &ivals, &nivals) > 0 && nivals > 0) sv.svLen = std::abs(ivals[0]);
       else sv.svLen = std::max(0, sv.svEnd - sv.pos);
-
-      // Full original INFO string
-      ks.l = 0;
-      vcf_format(hdr, rec, &ks);
-      {
-	const char* p = ks.s;
-	int tabs = 0;
-	while (*p && tabs < 7) { if (*p == '\t') ++tabs; ++p; }
-	const char* q = p;
-	while (*q && *q != '\t' && *q != '\n') ++q;
-	sv.infoStr = std::string(p, q);
-      }
       svV.push_back(sv);
     }
-
     bcf_destroy(rec);
-    if (gt    != NULL) free(gt);
+    if (gt != NULL) free(gt);
     if (ivals != NULL) free(ivals);
     if (svals != NULL) free(svals);
-    if (ks.s  != NULL) free(ks.s);
     bcf_hdr_destroy(hdr);
     bcf_close(ifile);
     return true;

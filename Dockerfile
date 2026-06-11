@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y \
 # set environment
 ENV BOOST_ROOT /usr
 
-# install breaktracer
+# install VarBridge
 RUN cd /opt \
     && git clone --recursive https://github.com/tobiasrausch/VarBridge.git \
     && cd /opt/VarBridge/ \
